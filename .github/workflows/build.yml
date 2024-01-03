@@ -59,7 +59,8 @@ jobs:
           make $KERNEL_CMDLINE CC="ccache clang" -j$(nproc --all) LOCALVERSION="$CONFIG_LOCALVERSION"
           IMAGE="$(pwd)/out/arch/arm64/boot/Image.gz-dtb"
           if [[ -f "$IMAGE" ]]; then
-            git clone https://github.com/osm0sis/AnyKernel3.git
+            git clone https://github.com/Coconutat/AnyKernel3_Backup -b Op6_KSU --depth=1
+            rm -rf AnyKernel3/.git
             cd AnyKernel3  # Change directory to AnyKernel3
             cp "$IMAGE" Image.gz-dtb
             zip -r9 "Kernel$CONFIG_LOCALVERSION.zip" .  # Create new zip
