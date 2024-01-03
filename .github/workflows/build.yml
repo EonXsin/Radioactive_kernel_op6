@@ -1,1 +1,82 @@
 
+name: Build OnePlus 6 and 6t KernelSU Kernel
+
+on:
+  workflow_dispatch:
+  schedule:
+    - cron: '0 0 * * 6'
+  push:
+    branches:
+      - HEAD
+  pull_request:
+    branches:
+      - HEAD
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    env:
+      CCACHE_COMPILERCHECK: "%compiler% -dumpmachine; %compiler% -dumpversion"
+      CCACHE_NOHASHDIR: "true"
+      CCACHE_MAXSIZE: "2G"
+      CCACHE_HARDLINK: "true"
+      KERNEL_DEFCONFIG: "radioactive_defconfig"
+      KERNEL_CMDLINE: "ARCH=arm64 CC=clang CLANG_TRIPLE=aarch64-linux-gnu- CROSS_COMPILE=aarch64-linux-gnu- CROSS_COMPILE_ARM32=arm-linux-gnueabi- O=out"
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v2
+        with:
+          submodules: 'true'
+          fetch-depth: 100
+
+      - name: Set up ccache
+        uses: hendrikmuhs/ccache-action@v1.2
+
+      - name: Install dependencies
+        run: |
+          sudo apt-get update -y 
+          sudo apt install gcc-aarch64-linux-gnu -y
+          sudo apt install gcc-arm-linux-gnueabi -y
+          sudo apt install binutils make python3 ccache libssl-dev build-essential bc bison flex unzip libssl-dev ca-certificates xz-utils mkbootimg cpio device-tree-compiler git git-lfs jq -y
+          curl -Ls $(curl -s https://api.github.com/repos/ZyCromerZ/Clang/releases/latest | grep "browser_download_url" | cut -d '"' -f 4) -o clang.tar.gz
+          mkdir clang
+          tar -xzvf clang.tar.gz -C clang
+
+      - name: Get Time
+        id: get_time
+        run: echo "TIME=$(TZ=UTC-8 date +%m%d%H%M )" >> $GITHUB_ENV
+
+      - name: Build Kernel-With-KernelSU
+        run: |
+          set -x
+          rm -rf KernelSU
+          rm -rf drivers/kernelsu
+          curl -LSs "https://raw.githubusercontent.com/tiann/KernelSU/main/kernel/setup.sh" | bash -s main
+          latest_version_of_Kernel_SU=$(curl -s https://api.github.com/repos/tiann/KernelSU/releases/latest | jq -r '.tag_name')
+          CONFIG_LOCALVERSION="-caffeine-$latest_version_of_Kernel_SU-${{ steps.get_time.outputs.TIME }}"
+          export PATH=$(pwd)/clang/bin/:$PATH
+          make $KERNEL_CMDLINE $KERNEL_DEFCONFIG CC="ccache clang"
+          make $KERNEL_CMDLINE CC="ccache clang" -j$(nproc --all) LOCALVERSION="$CONFIG_LOCALVERSION"
+          IMAGE="$(pwd)/out/arch/arm64/boot/Image.gz-dtb"
+          if [[ -f "$IMAGE" ]]; then
+            git clone https://github.com/osm0sis/AnyKernel3.git
+            cd AnyKernel3  # Change directory to AnyKernel3
+            cp "$IMAGE" Image.gz-dtb
+            zip -r9 "Kernel$CONFIG_LOCALVERSION.zip" .  # Create new zip
+            echo "Created Kernel$CONFIG_LOCALVERSION.zip"
+            # Set up GitHub API call to create a release and upload the asset
+            RELEASE_ID=$(curl -s -X POST -H "Authorization: token ${{ secrets.GH_TOKEN }}" -d "{\"tag_name\": \"$latest_version_of_Kernel_SU\", \"name\": \"$CONFIG_LOCALVERSION\", \"draft\": false}" "https://api.github.com/repos/anuragpindoriya/An-Unknwon_kernel_op6/releases" | jq -r .id)
+            echo "Created Release with ID $RELEASE_ID"
+            UPLOAD_URL=$(curl -s -H "Authorization: token ${{ secrets.GH_TOKEN }}" "https://api.github.com/repos/anuragpindoriya/An-Unknwon_kernel_op6/releases/$RELEASE_ID" | jq -r '.upload_url' | sed 's/{?name,label}//')
+            echo "Upload URL: $UPLOAD_URL"
+            ASSET_NAME="Kernel$CONFIG_LOCALVERSION.zip"
+            ASSET_PATH="Kernel$CONFIG_LOCALVERSION.zip"
+            curl -H "Authorization: token ${{ secrets.GH_TOKEN }}" -H "Content-Type: application/zip" --data-binary @"$ASSET_PATH" "$UPLOAD_URL?name=$ASSET_NAME"
+            echo "Uploaded Asset: $ASSET_NAME"
+          fi
+
+      - name: Upload Kernel-SU
+        uses: actions/upload-artifact@v3
+        with:
+          name: Caffeine_kernel_op6-KSU-${{ steps.get_time.outputs.TIME }}
+          path: "AnyKernel3/*.zip"
