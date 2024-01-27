@@ -1,15 +1,14 @@
-
 name: Build OnePlus 6 and 6t KernelSU Kernel
-
 on:
   workflow_dispatch:
   schedule:
-    - cron: '0 0 * * 6'
+      # 每周周六00:00运行. 时间设置参考： http://crontab.guru
+      - cron: '0 0 * * 6'
   push:
     branches:
       - HEAD
   pull_request:
-    branches:
+      branches:
       - HEAD
 
 jobs:
@@ -20,56 +19,45 @@ jobs:
       CCACHE_NOHASHDIR: "true"
       CCACHE_MAXSIZE: "2G"
       CCACHE_HARDLINK: "true"
-      KERNEL_DEFCONFIG: "radioactive_defconfig"
+      KERNEL_DEFCONFIG: "radioactive_ksu_defconfig"
       KERNEL_CMDLINE: "ARCH=arm64 CC=clang CLANG_TRIPLE=aarch64-linux-gnu- CROSS_COMPILE=aarch64-linux-gnu- CROSS_COMPILE_ARM32=arm-linux-gnueabi- O=out"
     steps:
-      - name: Checkout
-        uses: actions/checkout@v2
-        with:
-          submodules: 'true'
-          fetch-depth: 100
+    - name: Checkout
+      uses: actions/checkout@v3
+      with:
+        submodules: 'true'
+        fetch-depth: 100
 
-      - name: Set up ccache
-        uses: hendrikmuhs/ccache-action@v1.2
+    - name: Set up ccache
+      uses: hendrikmuhs/ccache-action@v1.2
 
-      - name: Install dependencies
-        run: |
-          sudo apt-get update -y 
-          sudo apt install gcc-aarch64-linux-gnu -y
-          sudo apt install gcc-arm-linux-gnueabi -y
-          sudo apt install binutils make python3 ccache libssl-dev build-essential bc bison flex unzip libssl-dev ca-certificates xz-utils mkbootimg cpio device-tree-compiler git git-lfs jq -y
-          curl -Ls $(curl -s https://api.github.com/repos/ZyCromerZ/Clang/releases/latest | grep "browser_download_url" | cut -d '"' -f 4) -o clang.tar.gz
-          mkdir clang
-          tar -xzvf clang.tar.gz -C clang
+    - name: Install dependencies
+      run: |
+        sudo apt-get update -y 
+        sudo apt install gcc-aarch64-linux-gnu -y
+        sudo apt install gcc-arm-linux-gnueabi -y
+        sudo apt install binutils make python3 libssl-dev build-essential bc  bison flex unzip libssl-dev ca-certificates xz-utils mkbootimg cpio device-tree-compiler git git-lfs -y
+        git clone https://github.com/kdrag0n/proton-clang --dept=1 -b master
+        git clone https://github.com/Coconutat/AnyKernel3_Backup -b Op6_KSU --depth=1
+        rm -rf AnyKernel3/.git
+    
+    - name: GetTime
+      id: get_time
+      run: |
+        echo "TIME=$(TZ=UTC-8 date +%m%d%H%M )" >> $GITHUB_OUTPUT
 
-      - name: Get Time
-        id: get_time
-        run: echo "TIME=$(TZ=UTC-8 date +%m%d%H%M )" >> $GITHUB_ENV
+    - name: Build Kernel-With-KernelSU
+      run: |
+        rm -rf KernelSU
+        rm -rf drivers/kernelsu
+        curl -LSs "https://raw.githubusercontent.com/tiann/KernelSU/main/kernel/setup.sh" | bash -s main
+        export PATH=$(pwd)/proton-clang/bin/:$PATH
+        make $KERNEL_CMDLINE $KERNEL_DEFCONFIG CC="ccache clang"
+        make $KERNEL_CMDLINE CC="ccache clang" -j$(nproc --all)
+        cp out/arch/arm64/boot/Image.gz-dtb AnyKernel3_Backup
 
-      - name: Build Kernel-With-KernelSU
-        run: |
-          set -x
-          rm -rf KernelSU
-          rm -rf drivers/kernelsu
-          curl -LSs "https://raw.githubusercontent.com/tiann/KernelSU/main/kernel/setup.sh" | bash -s main
-          latest_version_of_Kernel_SU=$(curl -s https://api.github.com/repos/tiann/KernelSU/releases/latest | jq -r '.tag_name')
-          CONFIG_LOCALVERSION="++-Caffeine-$latest_version_of_Kernel_SU-++${{ steps.get_time.outputs.TIME }}"
-          export PATH=$(pwd)/clang/bin/:$PATH
-          make $KERNEL_CMDLINE $KERNEL_DEFCONFIG CC="ccache clang"
-          make $KERNEL_CMDLINE CC="ccache clang" -j$(nproc --all) LOCALVERSION="$CONFIG_LOCALVERSION"
-          IMAGE="$(pwd)/out/arch/arm64/boot/Image.gz-dtb"
-          if [[ -f "$IMAGE" ]]; then
-            git clone https://github.com/Coconutat/AnyKernel3_Backup -b Op6_KSU --depth=1
-            mv AnyKernel3_Backup AnyKernel3
-            rm -rf AnyKernel3/.git
-            cd AnyKernel3  # Change directory to AnyKernel3
-            cp "$IMAGE" Image.gz-dtb
-            zip -r9 "Kernel$CONFIG_LOCALVERSION.zip" .  # Create new zip
-            echo "Created Kernel$CONFIG_LOCALVERSION.zip"
-          fi
-
-      - name: Upload Kernel-SU
-        uses: actions/upload-artifact@v3
-        with:
-          name: Caffeine_kernel_op6-KSU-${{ steps.get_time.outputs.TIME }}
-          path: "AnyKernel3/*.zip"
+    - name: Upload Kernel-SU
+      uses: actions/upload-artifact@v3
+      with:
+        name: Radioactive_kernel_op6-KSU-${{ steps.get_time.outputs.TIME }}
+        path: "AnyKernel3_Backup/*"
